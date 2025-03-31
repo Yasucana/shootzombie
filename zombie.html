@@ -1,0 +1,139 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <title>Shot Zombie</title>
+    <style>
+        canvas { border: 1px solid black; }
+    </style>
+</head>
+<body>
+    <button id="startButton">ゲーム開始</button>
+    <canvas id="gameCanvas" width="800" height="600"></canvas>
+    <script>
+        const canvas = document.getElementById('gameCanvas');
+        const ctx = canvas.getContext('2d');
+        const startButton = document.getElementById('startButton');
+
+        // プレイヤーオブジェクト
+        let player = {
+            x: 400,
+            y: 500,
+            width: 20,
+            height: 20,
+            speed: 5,
+            bullets: [],
+            generation: 1,
+            inheritedPower: 0
+        };
+
+        // ゾンビとスコア
+        let zombies = [];
+        let score = 0;
+        let gameRunning = false;
+
+        // キー入力
+        let keys = {};
+        window.addEventListener('keydown', (e) => keys[e.key] = true);
+        window.addEventListener('keyup', (e) => keys[e.key] = false);
+
+        // ゲーム開始
+        startButton.addEventListener('click', () => {
+            if (!gameRunning) {
+                gameRunning = true;
+                startButton.style.display = 'none';
+                gameLoop();
+                spawnZombies();
+            }
+        });
+
+        // ゲームループ
+        function gameLoop() {
+            if (!gameRunning) return;
+            update();
+            draw();
+            requestAnimationFrame(gameLoop);
+        }
+
+        // 更新処理
+        function update() {
+            // プレイヤーの移動
+            if (keys['ArrowLeft'] && player.x > 0) player.x -= player.speed;
+            if (keys['ArrowRight'] && player.x < canvas.width - player.width) player.x += player.speed;
+
+            // 弾の発射
+            if (keys[' ']) shoot();
+
+            // 弾の移動
+            player.bullets.forEach((bullet, index) => {
+                bullet.y -= 10;
+                if (bullet.y < 0) player.bullets.splice(index, 1);
+            });
+
+            // ゾンビの移動と衝突判定
+            zombies.forEach((zombie, zIndex) => {
+                zombie.y += 2;
+                if (zombie.y > canvas.height) {
+                    zombies.splice(zIndex, 1);
+                    playerDeath();
+                }
+                player.bullets.forEach((bullet, bIndex) => {
+                    if (isColliding(bullet, zombie)) {
+                        zombies.splice(zIndex, 1);
+                        player.bullets.splice(bIndex, 1);
+                        score += 10;
+                    }
+                });
+            });
+        }
+
+        // 描画処理
+        function draw() {
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            // プレイヤー
+            ctx.fillStyle = 'blue';
+            ctx.fillRect(player.x, player.y, player.width, player.height);
+            // 弾
+            ctx.fillStyle = 'red';
+            player.bullets.forEach(bullet => ctx.fillRect(bullet.x, bullet.y, 5, 10));
+            // ゾンビ
+            ctx.fillStyle = 'green';
+            zombies.forEach(zombie => ctx.fillRect(zombie.x, zombie.y, 20, 20));
+            // スコアと世代
+            ctx.fillStyle = 'black';
+            ctx.font = '20px Arial';
+            ctx.fillText(`スコア: ${score} | 世代: ${player.generation}`, 10, 30);
+        }
+
+        // 弾の発射
+        function shoot() {
+            if (player.bullets.length < 10) {
+                player.bullets.push({ x: player.x + 7, y: player.y });
+            }
+        }
+
+        // ゾンビの生成
+        function spawnZombies() {
+            if (!gameRunning) return;
+            zombies.push({ x: Math.random() * (canvas.width - 20), y: 0 });
+            setTimeout(spawnZombies, 2000); // 2秒ごとに生成
+        }
+
+        // 衝突判定
+        function isColliding(a, b) {
+            return a.x < b.x + 20 && a.x + 5 > b.x && a.y < b.y + 20 && a.y + 10 > b.y;
+        }
+
+        // プレイヤーの死亡処理
+        function playerDeath() {
+            player.inheritedPower += score / 10;
+            player.generation++;
+            player.x = 400;
+            player.y = 500;
+            player.bullets = [];
+            zombies = [];
+            score = 0;
+        }
+    </script>
+</body>
+</html>
