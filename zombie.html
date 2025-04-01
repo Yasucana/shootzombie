@@ -5,15 +5,27 @@
     <title>Shot Zombie</title>
     <style>
         canvas { border: 1px solid black; }
+        .upgrade-button { margin: 5px; }
+        #upgradeMenu { position: absolute; bottom: 10px; left: 10px; }
     </style>
 </head>
 <body>
     <button id="startButton">ゲーム開始</button>
     <canvas id="gameCanvas" width="800" height="600"></canvas>
+    <div id="upgradeMenu">
+        <button class="upgrade-button" onclick="upgrade('hp')">HP回復 (10コイン)</button>
+        <button class="upgrade-button" onclick="upgrade('bulletCount')">弾数増加 (20コイン)</button>
+        <button class="upgrade-button" onclick="upgrade('diagonalBullets')">斜線弾増加 (30コイン)</button>
+        <button class="upgrade-button" onclick="upgrade('bulletSize')">弾の大きさ (15コイン)</button>
+        <button class="upgrade-button" onclick="upgrade('bulletDamage')">弾の威力 (25コイン)</button>
+        <button class="upgrade-button" onclick="upgrade('playerSpeed')">プレイヤースピード (20コイン)</button>
+        <button class="upgrade-button" onclick="upgrade('wallHp')">壁の耐久力 (30コイン)</button>
+    </div>
     <script>
         const canvas = document.getElementById('gameCanvas');
         const ctx = canvas.getContext('2d');
         const startButton = document.getElementById('startButton');
+        const upgradeMenu = document.getElementById('upgradeMenu');
 
         // プレイヤーオブジェクト
         let player = {
@@ -22,22 +34,47 @@
             width: 20,
             height: 20,
             speed: 5,
+            hp: 100,
+            maxHp: 100,
             bullets: [],
+            bulletDamage: 10,
+            bulletSize: 10,
+            bulletHeight: 5,
+            bulletSpeed: 10,
+            reloadTime: 200,
+            lastShot: 0,
+            maxBullets: 1,
+            diagonalBullets: 0,
             generation: 1,
-            inheritedPower: 0
+            inheritedPower: 0,
+            bulletSizeUpgrades: 0,
+            reloadTimeUpgrades: 0,
+            maxBulletsUpgrades: 0
         };
 
-        // ゾンビとスコア
+        let defenseWall = { x: 0, y: canvas.height - 50, width: canvas.width, height: 20, hp: 100, maxHp: 100 };
         let zombies = [];
-        let score = 0;
+        let items = [];
+        let coins = 0;
+        let wave = 1;
+        let waveTimer = 20;
+        let waveInterval = 0;
+        let restTime = false;
         let gameRunning = false;
+        let players = [player];
 
-        // キー入力
+        const zombieTypes = [
+            { size: 10, hp: 3, speed: 3 },
+            { size: 20, hp: 6, speed: 2 },
+            { size: 30, hp: 9, speed: 1 },
+            { size: 40, hp: 12, speed: 1.5, type: 'chariot' },
+            { size: 15, hp: 5, speed: 4, type: 'bird' },
+            { size: 50, hp: 20, speed: 0.5, type: 'special' }
+        ];
         let keys = {};
+
         window.addEventListener('keydown', (e) => keys[e.key] = true);
         window.addEventListener('keyup', (e) => keys[e.key] = false);
-
-        // ゲーム開始
         startButton.addEventListener('click', () => {
             if (!gameRunning) {
                 gameRunning = true;
@@ -47,7 +84,6 @@
             }
         });
 
-        // ゲームループ
         function gameLoop() {
             if (!gameRunning) return;
             update();
@@ -55,85 +91,308 @@
             requestAnimationFrame(gameLoop);
         }
 
-        // 更新処理
         function update() {
-            // プレイヤーの移動
-            if (keys['ArrowLeft'] && player.x > 0) player.x -= player.speed;
-            if (keys['ArrowRight'] && player.x < canvas.width - player.width) player.x += player.speed;
+            if (waveTimer > 0) {
+                waveTimer -= 1 / 60;
+            } else if (waveInterval <= 0) {
+                waveInterval = 5;
+            }
 
-            // 弾の発射
-            if (keys[' ']) shoot();
+            if (waveInterval > 0) {
+                waveInterval -= 1 / 60;
+                if (waveInterval <= 0) {
+                    wave++;
+                    if (wave % 5 === 0) {
+                        restTime = true;
+                    } else {
+                        waveTimer = 60;
+                        spawnZombies();
+                    }
+                }
+                return;
+            }
 
-            // 弾の移動
-            player.bullets.forEach((bullet, index) => {
-                bullet.y -= 10;
-                if (bullet.y < 0) player.bullets.splice(index, 1);
+            players.forEach(p => {
+                if (keys['ArrowLeft'] && p.x > 0) p.x -= p.speed;
+                if (keys['ArrowRight'] && p.x < canvas.width - p.width) p.x += p.speed;
+                if (keys['ArrowUp'] && p.y > 0) p.y -= p.speed;
+                if (keys['ArrowDown'] && p.y < canvas.height - p.height) p.y += p.speed;
+
+                if (Date.now() - p.lastShot > p.reloadTime) {
+                    shoot(p);
+                    p.lastShot = Date.now();
+                }
             });
 
-            // ゾンビの移動と衝突判定
-            zombies.forEach((zombie, zIndex) => {
-                zombie.y += 2;
-                if (zombie.y > canvas.height) {
-                    zombies.splice(zIndex, 1);
-                    playerDeath();
-                }
-                player.bullets.forEach((bullet, bIndex) => {
-                    if (isColliding(bullet, zombie)) {
-                        zombies.splice(zIndex, 1);
-                        player.bullets.splice(bIndex, 1);
-                        score += 10;
+            players.forEach(p => {
+                p.bullets.forEach((bullet, bIndex) => {
+                    if (bullet.angle) {
+                        bullet.x += Math.sin(bullet.angle) * bullet.speed;
+                        bullet.y -= Math.cos(bullet.angle) * bullet.speed;
+                    } else {
+                        bullet.y -= bullet.speed;
                     }
+                    if (bullet.y < 0 || bullet.x < 0 || bullet.x > canvas.width) p.bullets.splice(bIndex, 1);
                 });
             });
+
+            zombies.forEach((zombie, zIndex) => {
+                zombie.y += zombie.speed;
+                if (zombie.y + zombie.height > defenseWall.y) {
+                    defenseWall.hp -= 1;
+                    zombies.splice(zIndex, 1);
+                    if (defenseWall.hp <= 0) gameOver();
+                    return;
+                }
+                players.forEach(p => {
+                    if (isColliding(p, zombie)) {
+                        p.hp -= 10;
+                        zombies.splice(zIndex, 1);
+                        if (p.hp <= 0) gameOver();
+                        return;
+                    }
+                    p.bullets.forEach((bullet, bIndex) => {
+                        if (isColliding(bullet, zombie)) {
+                            zombie.hp -= bullet.damage;
+                            p.bullets.splice(bIndex, 1);
+                            if (zombie.hp <= 0) {
+                                zombies.splice(zIndex, 1);
+                                coins += 10;
+                                if (zombie.type === 'special') {
+                                    dropPlayerCapsule(zombie.x, zombie.y);
+                                }
+                            }
+                        }
+                    });
+                });
+            });
+
+            items.forEach((item, iIndex) => {
+                item.y += 1;
+                if (item.y > canvas.height) {
+                    items.splice(iIndex, 1);
+                } else {
+                    players.forEach(p => {
+                        if (isColliding(p, item)) {
+                            if (item.type === 'player') {
+                                addPlayer();
+                            }
+                            items.splice(iIndex, 1);
+                        }
+                    });
+                }
+            });
         }
 
-        // 描画処理
         function draw() {
             ctx.clearRect(0, 0, canvas.width, canvas.height);
-            // プレイヤー
-            ctx.fillStyle = 'blue';
-            ctx.fillRect(player.x, player.y, player.width, player.height);
-            // 弾
-            ctx.fillStyle = 'red';
-            player.bullets.forEach(bullet => ctx.fillRect(bullet.x, bullet.y, 5, 10));
-            // ゾンビ
-            ctx.fillStyle = 'green';
-            zombies.forEach(zombie => ctx.fillRect(zombie.x, zombie.y, 20, 20));
-            // スコアと世代
+
+            ctx.fillStyle = 'gray';
+            ctx.fillRect(defenseWall.x, defenseWall.y, defenseWall.width, defenseWall.height);
             ctx.fillStyle = 'black';
             ctx.font = '20px Arial';
-            ctx.fillText(`スコア: ${score} | 世代: ${player.generation}`, 10, 30);
-        }
+            ctx.fillText(`Defense Wall HP: ${defenseWall.hp}/${defenseWall.maxHp}`, 10, 60);
 
-        // 弾の発射
-        function shoot() {
-            if (player.bullets.length < 10) {
-                player.bullets.push({ x: player.x + 7, y: player.y });
+            players.forEach(p => {
+                ctx.fillStyle = 'blue';
+                ctx.fillRect(p.x, p.y, p.width, p.height);
+                ctx.fillText(`Player HP: ${p.hp}/${p.maxHp}`, 10, 90);
+            });
+
+            ctx.fillStyle = 'red';
+            players.forEach(p => {
+                p.bullets.forEach(bullet => {
+                    ctx.fillRect(bullet.x, bullet.y, bullet.width, bullet.height);
+                });
+            });
+
+            zombies.forEach(zombie => {
+                ctx.fillStyle = zombie.type === 'chariot' ? 'purple' : zombie.type === 'bird' ? 'brown' : zombie.type === 'special' ? 'gold' : 'green';
+                ctx.fillRect(zombie.x, zombie.y, zombie.width, zombie.height);
+                ctx.fillStyle = 'red';
+                ctx.fillRect(zombie.x, zombie.y - 10, zombie.width, 5);
+                ctx.fillStyle = 'lime';
+                ctx.fillRect(zombie.x, zombie.y - 10, (zombie.hp / zombie.maxHp) * zombie.width, 5);
+            });
+
+            ctx.fillStyle = 'orange';
+            items.forEach(item => ctx.fillRect(item.x, item.y, item.width, item.height));
+
+            ctx.fillStyle = 'black';
+            ctx.font = '20px Arial';
+            if (restTime) {
+                ctx.fillText(`休憩中 - コイン: ${coins} | Wave: ${wave}`, 10, 30);
+            } else if (waveInterval > 0) {
+                ctx.fillText(`次のWaveまで: ${Math.ceil(waveInterval)}秒`, 10, 30);
+            } else {
+                ctx.fillText(`Coins: ${coins} | Wave: ${wave} | Time: ${Math.ceil(waveTimer)}`, 10, 30);
             }
         }
 
-        // ゾンビの生成
+        function shoot(p) {
+            const bulletCount = p.maxBullets;
+            const spacing = p.bulletSize + 5;
+            const totalWidth = (bulletCount - 1) * spacing;
+            const startX = p.x + p.width / 2 - totalWidth / 2;
+
+            for (let i = 0; i < bulletCount; i++) {
+                let bullet = {
+                    x: startX + i * spacing,
+                    y: p.y,
+                    width: p.bulletSize,
+                    height: p.bulletHeight,
+                    speed: p.bulletSpeed,
+                    damage: p.bulletDamage
+                };
+                p.bullets.push(bullet);
+
+                for (let j = 0; j < p.diagonalBullets; j++) {
+                    p.bullets.push({
+                        x: bullet.x,
+                        y: bullet.y,
+                        width: bullet.width,
+                        height: bullet.height,
+                        speed: bullet.speed,
+                        damage: bullet.damage,
+                        angle: (j + 1) * (Math.PI / 6)
+                    });
+                    p.bullets.push({
+                        x: bullet.x,
+                        y: bullet.y,
+                        width: bullet.width,
+                        height: bullet.height,
+                        speed: bullet.speed,
+                        damage: bullet.damage,
+                        angle: -(j + 1) * (Math.PI / 6)
+                    });
+                }
+            }
+        }
+
         function spawnZombies() {
-            if (!gameRunning) return;
-            zombies.push({ x: Math.random() * (canvas.width - 20), y: 0 });
-            setTimeout(spawnZombies, 2000); // 2秒ごとに生成
+            if (!gameRunning || restTime || waveInterval > 0) return;
+            let type;
+            if (wave >= 6) {
+                type = zombieTypes[Math.floor(Math.random() * zombieTypes.length)];
+            } else if (wave % 5 === 0) {
+                type = zombieTypes[5];
+            } else {
+                type = zombieTypes[Math.floor(Math.random() * 3)];
+            }
+            zombies.push({
+                x: Math.random() * (canvas.width - type.size),
+                y: 0,
+                width: type.size,
+                height: type.size,
+                hp: type.hp + wave * 2,
+                maxHp: type.hp + wave * 2,
+                speed: type.speed,
+                type: type.type
+            });
+            setTimeout(spawnZombies, 500);
         }
 
-        // 衝突判定
         function isColliding(a, b) {
-            return a.x < b.x + 20 && a.x + 5 > b.x && a.y < b.y + 20 && a.y + 10 > b.y;
+            return a.x < b.x + b.width &&
+                   a.x + a.width > b.x &&
+                   a.y < b.y + b.height &&
+                   a.y + a.height > b.y;
         }
 
-        // プレイヤーの死亡処理
-        function playerDeath() {
-            player.inheritedPower += score / 10;
+        function dropPlayerCapsule(x, y) {
+            items.push({
+                x: x,
+                y: y,
+                width: 10,
+                height: 10,
+                type: 'player'
+            });
+        }
+
+        function addPlayer() {
+            const newPlayer = { ...player, x: player.x + 30, y: player.y, bullets: [] };
+            players.push(newPlayer);
+        }
+
+        function upgrade(type) {
+            switch (type) {
+                case 'hp':
+                    if (coins >= 10) {
+                        player.hp = Math.min(player.maxHp, player.hp + 20);
+                        coins -= 10;
+                    }
+                    break;
+                case 'bulletCount':
+                    if (coins >= 20) {
+                        player.maxBullets += 1;
+                        coins -= 20;
+                    }
+                    break;
+                case 'diagonalBullets':
+                    if (coins >= 30) {
+                        player.diagonalBullets += 1;
+                        coins -= 30;
+                    }
+                    break;
+                case 'bulletSize':
+                    if (coins >= 15) {
+                        player.bulletSize += 2;
+                        coins -= 15;
+                    }
+                    break;
+                case 'bulletDamage':
+                    if (coins >= 25) {
+                        player.bulletDamage += 5;
+                        coins -= 25;
+                    }
+                    break;
+                case 'playerSpeed':
+                    if (coins >= 20) {
+                        player.speed += 1;
+                        coins -= 20;
+                    }
+                    break;
+                case 'wallHp':
+                    if (coins >= 30) {
+                        defenseWall.maxHp += 20;
+                        defenseWall.hp += 20;
+                        coins -= 30;
+                    }
+                    break;
+            }
+        }
+
+        function gameOver() {
+            gameRunning = false;
+            player.inheritedPower += coins / 10;
             player.generation++;
+            resetGame();
+        }
+
+        function resetGame() {
             player.x = 400;
             player.y = 500;
+            player.hp = player.maxHp;
             player.bullets = [];
             zombies = [];
-            score = 0;
+            items = [];
+            defenseWall.hp = defenseWall.maxHp;
+            coins = 0;
+            wave = 1;
+            waveTimer = 60;
+            waveInterval = 0;
+            restTime = false;
+            startButton.style.display = 'block';
+            players = [player];
         }
+
+        window.addEventListener('keydown', (e) => {
+            if (restTime && e.key === ' ') {
+                restTime = false;
+                waveTimer = 60;
+                spawnZombies();
+            }
+        });
     </script>
 </body>
 </html>
